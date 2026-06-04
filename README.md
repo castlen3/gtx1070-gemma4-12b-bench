@@ -26,8 +26,7 @@
 
 ```
 llama-server.exe \
-  -m "F:/MODELS/.../gemma-4-12B-it-Q4_K_M.gguf" \
-  --host 0.0.0.0 --port 8081 \
+  -m <path-to>/gemma-4-12B-it-Q4_K_M.gguf \
   -c 32768 -ngl 40 -fa on \
   -ctk q8_0 -ctv q8_0 -b 512 -ub 256 \
   --metrics
