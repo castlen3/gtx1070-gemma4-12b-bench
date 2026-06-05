@@ -1,14 +1,14 @@
-# GTX 1070 8GB 跑 Gemma 4 12B — 完整 Benchmark
+# GTX 1070 8GB Benchmark: Gemma 4 12B Q4_K_M
 
-[English Version](README_EN.md)
-
-> **Gemma 4 12B Q4_K_M on NVIDIA GTX 1070 8GB (Pascal, CC 6.1) — Full Sweep**
+> **Full performance sweep for running Gemma 4 12B Q4_K_M on NVIDIA GTX 1070 8GB (Pascal, CC 6.1)**
 >
-> Context 32K、KV q8_0/q8_0、Flash Attention、llama.cpp b9500 CUDA 12.4
+> 32K context, KV cache q8_0/q8_0, Flash Attention, llama.cpp b9500 CUDA 12.4
+
+[中文版](README.md)
 
 ---
 
-## 硬體 / Hardware
+## Hardware / Software
 
 | Item | Spec |
 |---|---|
@@ -22,9 +22,9 @@
 
 ---
 
-## Benchmark 結論 / Conclusions
+## Conclusions
 
-### 日用推薦 / Daily Driver
+### Daily Driver (Stable, Long Context)
 
 ```
 llama-server.exe \
@@ -36,44 +36,44 @@ llama-server.exe \
 
 | Metric | Value |
 |---|---|
-| VRAM | ~7560 MiB（~600 MiB headroom） |
-| Decode（短 prompt） | ~10.4 tok/s |
-| Prefill（657 tokens） | ~226 tok/s |
-| Prefill（12K tokens） | ~185 tok/s |
-| 穩定性 | 全長度無 thrashing，長短 prompt 皆可 |
+| VRAM | ~7560 MiB (~600 MiB headroom) |
+| Decode (short prompt) | ~10.4 tok/s |
+| Prefill (657 tokens) | ~226 tok/s |
+| Prefill (12K tokens) | ~185 tok/s |
+| Stability | No thrashing at any context length |
 
-### 性能模式 / Performance Mode
+### Performance Mode (Max Speed, Shorter Context)
 
 ```
--ngl 42 -ub 64（其他同上）
+-ngl 42 -ub 64 (everything else same as above)
 ```
 
 | Metric | Value |
 |---|---|
-| VRAM | ~7788 MiB（~400 MiB headroom） |
-| Decode（短 prompt） | **~11.3 tok/s** |
-| Prefill（657 tokens） | ~174 tok/s |
-| 適用場景 | 多輪對話、code gen（prompt < 4K） |
+| VRAM | ~7788 MiB (~400 MiB headroom) |
+| Decode (short prompt) | **~11.3 tok/s** |
+| Prefill (657 tokens) | ~174 tok/s |
+| Best for | Multi-turn chat, code generation (prompt < 4K tokens) |
 
 ---
 
-## Round 1：最小可行測試 / Smoke Test
+## Round 1: Smoke Test
 
-目的：確認 32K + q8/q8 能否啟動。
+**Goal:** Confirm 32K context with q8/q8 KV cache works.
 
 | # | ctk | ctv | ngl | ubatch | start | gen | VRAM | prompt t/s | decode t/s |
-|---|---:|---|---:|---:|---:|---|---|---:|---:|---:|
+|---|---:|---|---:|---:|---:|---|---|---:|---:|
 | 1 | q8_0 | q8_0 | auto→36 | 128 | ✅ | ✅ | 6833 MiB | 22.7 | 9.65 |
 | 2 | q8_0 | q4_0 | auto→37 | 128 | ✅ | ✅ | 6726 MiB | 23.4 | 9.40 |
 | 3 | q8_0 | q8_0 | auto→36 | 64 | ✅ | ✅ | 6832 MiB | 23.0 | **9.74** |
 
-**結論：q8/q8 完全可行，VRAM 83% 使用率，無 thrashing。**
+**Conclusion: q8/q8 is fully viable — 83% VRAM usage, no thrashing.**
 
 ---
 
-## Round 2：NGL Sweep（手動指定）
+## Round 2: NGL (GPU Layer) Sweep
 
-固定：ctx=32768, q8/q8, b512, ub=64, prompt=657 tok, gen=256 tok
+Fixed: ctx=32768, q8/q8, b512, ub=64, prompt=657 tok, gen=256 tok
 
 | ngl | VRAM peak | GPU model | GPU KV | prompt t/s | decode t/s | Note |
 | --: | --------: | --------: | -----: | ---------: | ---------: | ---- |
@@ -83,14 +83,14 @@ llama-server.exe \
 | 42 | 7745 MiB | 6076 MiB | 614 MiB | 177.9 | **11.44** | ⚠️ high risk |
 | 44 | 7878 MiB | 6341 MiB | 632 MiB | **59.1** ⬇ | 11.23 | 🔴 thrashing |
 
-**ngl=44 prompt 速度崩跌 3x（178→59 tok/s），判定 thrashing，淘汰。**
-**decode 線性改善至 ngl=42；每 +2 層約 +0.5 tok/s。**
+**ngl=44 crashes prompt speed by 3× (178→59 tok/s) — thrashing confirmed, eliminated.**
+**Decode improves linearly up to ngl=42; each +2 layers ≈ +0.5 tok/s.**
 
 ---
 
-## Round 3：精修 NGL + ubatch
+## Round 3: Fine-Tuning NGL + ubatch
 
-固定：ctx=32768, q8/q8, b512, prompt=657 tok, gen=512 tok
+Fixed: ctx=32768, q8/q8, b512, prompt=657 tok, gen=512 tok
 
 | # | ngl | ubatch | VRAM | compute buf | prompt t/s | decode t/s | Note |
 | --: | --: | -----: | --------: | ----------: | ---------: | ---------: | ---- |
@@ -99,26 +99,26 @@ llama-server.exe \
 | C | 41 | 128 | 7667 MiB | 127 MiB | **204.8** | 10.83 | prompt peak |
 | D | 42 | 64 | 7786 MiB | 114 MiB | 174.4 | **11.31** | decode peak |
 
-**ub=128 顯著提升 prompt 速度（+22.8%），decode 微降可忽略。ngl=42 重測穩定。**
+**ubatch=128 gives a significant prompt speed boost (+22.8%) with negligible decode trade-off. ngl=42 re-tested stable.**
 
 ---
 
-## Round 4：長 Context + ubatch 驗證
+## Round 4: Long Context & Final Tuning
 
-### 4A：ubatch=256 測試
+### 4A: ubatch=256 Test
 
-固定：ngl=40, prompt=657 tok, gen=512 tok
+Fixed: ngl=40, prompt=657 tok, gen=512 tok
 
 | ubatch | VRAM | compute buf | prompt t/s | decode t/s |
 | -----: | --------: | ----------: | ---------: | ---------: |
 | 128 | 7475 MiB | 127 MiB | 197.6 | 10.40 |
 | 256 | 7515 MiB | 155 MiB | **225.6** | 10.39 |
 
-**ub=256 再 +14% prompt 速度，VRAM 僅 +40 MiB，強烈推薦。**
+**ubatch=256 adds another +14% prompt speed for only ~40 MiB more VRAM. Strongly recommended.**
 
-### 4B：長 Prompt Prefill
+### 4B: Long Prompt Prefill
 
-固定：ngl=40, ub=256, gen=128 tok
+Fixed: ngl=40, ub=256, gen=128 tok
 
 | Prompt tokens | VRAM peak | prompt t/s | decode t/s |
 | ------------: | --------: | ---------: | ---------: |
@@ -127,20 +127,20 @@ llama-server.exe \
 | 10,345 | 7560 MiB | 191.6 | 8.7 |
 | 12,192 | 7560 MiB | 184.6 | 8.6 |
 
-**VRAM 全程鎖定 7560 MiB（KV cache 預分配），速度線性優雅衰減，無 thrashing。**
+**VRAM stays constant at 7560 MiB (pre-allocated KV cache). Speed degrades gracefully — no thrashing at any length.**
 
-### 4C：Performance Stretch（ngl=42）
+### 4C: Performance Stretch (ngl=42)
 
 | ngl | Prompt tokens | VRAM | prompt t/s | decode t/s |
 | --: | ------------: | --------: | ---------: | ---------: |
 | 42 | 5,261 | 7788 MiB | 166.1 | 9.9 |
 | 42 | 10,345 | 7788 MiB | 147.2 | 9.4 |
 
-**ngl=42 在長 prompt 下 prompt 速度僅為 ngl=40 的 ~77%，但 decode 仍快 ~7%。適合 prompt < 4K 場景。**
+**ngl=42 runs ~23% slower on long prompts vs. ngl=40, but decode is still ~7% faster. Best suited for prompt < 4K scenarios.**
 
 ---
 
-## 模型架構 / Model Architecture
+## Model Architecture
 
 | Field | Value |
 |---|---|
@@ -157,7 +157,7 @@ llama-server.exe \
 
 ## Logs
 
-完整 logs 在 `logs_round4/`，Round 1-3 在 `logs/`。
+Full logs are in `logs_round4/`, with Round 1–3 logs in `logs/`.
 
 ---
 
