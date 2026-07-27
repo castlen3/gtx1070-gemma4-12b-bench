@@ -1,166 +1,212 @@
-# GTX 1070 8GB 跑 Gemma 4 12B — 完整 Benchmark
+# GTX 1070 8GB 跑 Gemma 4 12B — 快速設定與實測
 
 [English Version](README_EN.md)
 
-> **Gemma 4 12B Q4_K_M on NVIDIA GTX 1070 8GB (Pascal, CC 6.1) — Full Sweep**
->
-> Context 32K、KV q8_0/q8_0、Flash Attention、llama.cpp b9500 CUDA 12.4
+這個 repo 的目的很單純：**之後只要有一台電腦插上 GTX 1070 8GB，就能快速把 Gemma 4 12B Q4_K_M 跑起來，並直接套用已經測過的參數。**
+
+不是要求完全複製原本的 i7-7700K 平台。CPU、RAM、OS 不同時絕對速度會有差，但 GTX 1070 的 VRAM 配置、GPU offload 與 ubatch 的甜蜜點仍可作為很實用的起始值。
 
 ---
 
-## 硬體 / Hardware
+## TL;DR：直接這樣跑
 
-| Item | Spec |
-|---|---|
-| GPU | NVIDIA GeForce GTX 1070 (8192 MiB, Pascal CC 6.1) |
-| CPU | Intel Core i7-7700K @ 4.20GHz (4c/8t) |
-| RAM | 32 GB DDR4 |
-| OS | Windows 10 |
-| Driver | 582.28 |
-| llama.cpp | b9500 (3d1998634), Clang 19.1.5, CUDA 12.4 |
-| Model | [google/gemma-4-12b-it-Q4_K_M](https://huggingface.co/lmstudio-community/gemma-4-12B-it-GGUF) (7.04 GB, 4.95 BPW) |
+### 穩定 / 長 context 推薦
 
----
-
-## Benchmark 結論 / Conclusions
-
-### 日用推薦 / Daily Driver
-
-```
-llama-server.exe \
-  -m <path-to>/gemma-4-12B-it-Q4_K_M.gguf \
-  -c 32768 -ngl 40 -fa on \
-  -ctk q8_0 -ctv q8_0 -b 512 -ub 256 \
+```bat
+llama-server.exe ^
+  -m "gemma-4-12B-it-Q4_K_M.gguf" ^
+  -c 32768 ^
+  -ngl 40 ^
+  -fa on ^
+  -ctk q8_0 ^
+  -ctv q8_0 ^
+  -b 512 ^
+  -ub 256 ^
   --metrics
 ```
 
-| Metric | Value |
-|---|---|
-| VRAM | ~7560 MiB（~600 MiB headroom） |
+原始測試機結果：
+
+| 項目 | 約略結果 |
+|---|---:|
+| VRAM | ~7560 MiB |
+| VRAM headroom | ~600 MiB |
 | Decode（短 prompt） | ~10.4 tok/s |
 | Prefill（657 tokens） | ~226 tok/s |
 | Prefill（12K tokens） | ~185 tok/s |
-| 穩定性 | 全長度無 thrashing，長短 prompt 皆可 |
+| 32K context | 可正常啟動 |
 
-### 性能模式 / Performance Mode
+**這組是預設建議。** VRAM 還留有一些空間，長 prompt 也沒有出現明顯效能崩跌。
 
+### 短 prompt / 追求 decode
+
+```text
+-ngl 42 -ub 64
 ```
--ngl 42 -ub 64（其他同上）
-```
 
-| Metric | Value |
-|---|---|
-| VRAM | ~7788 MiB（~400 MiB headroom） |
-| Decode（短 prompt） | **~11.3 tok/s** |
+其他設定相同。
+
+原始測試機約：
+
+| 項目 | 約略結果 |
+|---|---:|
+| VRAM | ~7788 MiB |
+| Decode | ~11.3 tok/s |
 | Prefill（657 tokens） | ~174 tok/s |
-| 適用場景 | 多輪對話、code gen（prompt < 4K） |
+
+`ngl=42` 比較接近 8GB VRAM 上限。短 prompt 可以換到較快 decode，但長 prompt prefill 明顯不如 `ngl=40 / ub=256`。
 
 ---
 
-## Round 1：最小可行測試 / Smoke Test
+## Reference machine
 
-目的：確認 32K + q8/q8 能否啟動。
+這只是原始數據的參考平台，**不是必要硬體**。
 
-| # | ctk | ctv | ngl | ubatch | start | gen | VRAM | prompt t/s | decode t/s |
-|---|---:|---|---:|---:|---:|---|---|---:|---:|---:|
-| 1 | q8_0 | q8_0 | auto→36 | 128 | ✅ | ✅ | 6833 MiB | 22.7 | 9.65 |
-| 2 | q8_0 | q4_0 | auto→37 | 128 | ✅ | ✅ | 6726 MiB | 23.4 | 9.40 |
-| 3 | q8_0 | q8_0 | auto→36 | 64 | ✅ | ✅ | 6832 MiB | 23.0 | **9.74** |
+| Item | Spec |
+|---|---|
+| GPU | NVIDIA GeForce GTX 1070 8GB（8192 MiB, Pascal CC 6.1） |
+| CPU | Intel Core i7-7700K @ 4.20GHz（4C/8T） |
+| RAM | 32 GB DDR4 |
+| OS | Windows 10 |
+| Driver | 582.28 |
+| llama.cpp | b9500, commit `3d1998634`, CUDA 12.4 |
+| Model | `gemma-4-12B-it-Q4_K_M.gguf` |
+| Model repo | `lmstudio-community/gemma-4-12B-it-GGUF` |
+| Quant | Q4_K_M, ~7.04 GB, 4.95 BPW |
 
-**結論：q8/q8 完全可行，VRAM 83% 使用率，無 thrashing。**
-
----
-
-## Round 2：NGL Sweep（手動指定）
-
-固定：ctx=32768, q8/q8, b512, ub=64, prompt=657 tok, gen=256 tok
-
-| ngl | VRAM peak | GPU model | GPU KV | prompt t/s | decode t/s | Note |
-| --: | --------: | --------: | -----: | ---------: | ---------: | ---- |
-| 36 | 6899 MiB | 5312 MiB | 524 MiB | 125.6 | 9.15 | baseline (=auto) |
-| 38 | 7173 MiB | 5579 MiB | 542 MiB | 149.3 | 9.79 | |
-| 40 | 7449 MiB | 5819 MiB | 578 MiB | 161.8 | **10.52** | ⭐ sweet spot |
-| 42 | 7745 MiB | 6076 MiB | 614 MiB | 177.9 | **11.44** | ⚠️ high risk |
-| 44 | 7878 MiB | 6341 MiB | 632 MiB | **59.1** ⬇ | 11.23 | 🔴 thrashing |
-
-**ngl=44 prompt 速度崩跌 3x（178→59 tok/s），判定 thrashing，淘汰。**
-**decode 線性改善至 ngl=42；每 +2 層約 +0.5 tok/s。**
+CPU 或 RAM 不同時，尤其因為模型不是 100% GPU-resident，絕對 tok/s 可能不同。這份資料主要用來快速找到 GTX 1070 的合理 VRAM / offload 設定。
 
 ---
 
-## Round 3：精修 NGL + ubatch
+## 最重要的已知結論
 
-固定：ctx=32768, q8/q8, b512, prompt=657 tok, gen=512 tok
+### 1. `ngl=40` 是最實用的平衡點
 
-| # | ngl | ubatch | VRAM | compute buf | prompt t/s | decode t/s | Note |
-| --: | --: | -----: | --------: | ----------: | ---------: | ---------: | ---- |
-| A | 41 | 64 | 7653 MiB | 114 MiB | 170.8 | 10.87 | |
-| B | 40 | 128 | 7511 MiB | 127 MiB | **198.7** | 10.40 | prompt +22.8% |
-| C | 41 | 128 | 7667 MiB | 127 MiB | **204.8** | 10.83 | prompt peak |
-| D | 42 | 64 | 7786 MiB | 114 MiB | 174.4 | **11.31** | decode peak |
+固定條件：ctx=32768、KV q8_0/q8_0、b512、ub64、原始短 prompt 約 657 tokens。
 
-**ub=128 顯著提升 prompt 速度（+22.8%），decode 微降可忽略。ngl=42 重測穩定。**
+| ngl | VRAM peak | GPU model | GPU KV | prompt t/s | decode t/s | 判讀 |
+|---:|---:|---:|---:|---:|---:|---|
+| 36 | 6899 MiB | 5312 MiB | 524 MiB | 125.6 | 9.15 | baseline |
+| 38 | 7173 MiB | 5579 MiB | 542 MiB | 149.3 | 9.79 | 可用 |
+| 40 | 7449 MiB | 5819 MiB | 578 MiB | 161.8 | 10.52 | **sweet spot** |
+| 42 | 7745 MiB | 6076 MiB | 614 MiB | 177.9 | 11.44 | VRAM 很緊 |
+| 44 | 7878 MiB | 6341 MiB | 632 MiB | 59.1 | 11.23 | 明顯異常慢 |
 
----
+`ngl=44` 時 prefill 從約 178 tok/s 掉到約 59 tok/s，而且 VRAM 已非常接近上限。這個行為與記憶體壓力 / paging 或 thrashing 相符，因此不建議。
 
-## Round 4：長 Context + ubatch 驗證
+### 2. `ubatch=256` 對 prefill 很划算
 
-### 4A：ubatch=256 測試
-
-固定：ngl=40, prompt=657 tok, gen=512 tok
+固定 `ngl=40`：
 
 | ubatch | VRAM | compute buf | prompt t/s | decode t/s |
-| -----: | --------: | ----------: | ---------: | ---------: |
+|---:|---:|---:|---:|---:|
 | 128 | 7475 MiB | 127 MiB | 197.6 | 10.40 |
 | 256 | 7515 MiB | 155 MiB | **225.6** | 10.39 |
 
-**ub=256 再 +14% prompt 速度，VRAM 僅 +40 MiB，強烈推薦。**
+只多約 40 MiB VRAM，prefill 明顯提升，decode 幾乎不變。
 
-### 4B：長 Prompt Prefill
-
-固定：ngl=40, ub=256, gen=128 tok
+### 3. 長 prompt 用 `ngl=40 / ub=256` 比較穩
 
 | Prompt tokens | VRAM peak | prompt t/s | decode t/s |
-| ------------: | --------: | ---------: | ---------: |
-| 2,618 | 7560 MiB | **238.1** | 9.6 |
+|---:|---:|---:|---:|
+| 2,618 | 7560 MiB | 238.1 | 9.6 |
 | 5,261 | 7560 MiB | 216.1 | 9.2 |
 | 10,345 | 7560 MiB | 191.6 | 8.7 |
 | 12,192 | 7560 MiB | 184.6 | 8.6 |
 
-**VRAM 全程鎖定 7560 MiB（KV cache 預分配），速度線性優雅衰減，無 thrashing。**
+KV cache 預先配置後，這幾個長度下 VRAM 都維持約 7560 MiB。
 
-### 4C：Performance Stretch（ngl=42）
+相反地，`ngl=42`：
 
-| ngl | Prompt tokens | VRAM | prompt t/s | decode t/s |
-| --: | ------------: | --------: | ---------: | ---------: |
-| 42 | 5,261 | 7788 MiB | 166.1 | 9.9 |
-| 42 | 10,345 | 7788 MiB | 147.2 | 9.4 |
+| Prompt tokens | VRAM | prompt t/s | decode t/s |
+|---:|---:|---:|---:|
+| 5,261 | 7788 MiB | 166.1 | 9.9 |
+| 10,345 | 7788 MiB | 147.2 | 9.4 |
 
-**ngl=42 在長 prompt 下 prompt 速度僅為 ngl=40 的 ~77%，但 decode 仍快 ~7%。適合 prompt < 4K 場景。**
+所以：
+
+- **一般聊天、長 context：`ngl=40 / ub=256`**
+- **短 prompt、在意 decode：`ngl=42 / ub=64`**
+- **不要直接衝 `ngl=44`**
 
 ---
 
-## 模型架構 / Model Architecture
+## 新電腦快速上手流程
+
+1. 裝 NVIDIA driver。
+2. 準備 CUDA 版 `llama.cpp`。
+3. 下載 `gemma-4-12B-it-Q4_K_M.gguf`。
+4. 先用 `ngl=40 / ub=256 / ctx=32768 / KV q8_0` 啟動。
+5. 看啟動後 VRAM 是否仍保留約 400–600 MiB 以上。
+6. 如果該台機器背景程式較多或 VRAM 不夠，先降到 `ngl=38`。
+7. 若只跑短 prompt，而且 VRAM 很乾淨，再試 `ngl=42 / ub=64`。
+
+Windows 可直接修改 repo 裡的 `gemma4_12b_perf.bat`，只需要填入本機的 llama.cpp 與模型路徑。
+
+---
+
+## 早期 smoke test 紀錄
+
+32K context + q8/q8 KV 可以正常工作：
+
+| ctk | ctv | ngl | ubatch | VRAM | prompt t/s | decode t/s |
+|---|---|---:|---:|---:|---:|---:|
+| q8_0 | q8_0 | auto→36 | 128 | 6833 MiB | 22.7 | 9.65 |
+| q8_0 | q4_0 | auto→37 | 128 | 6726 MiB | 23.4 | 9.40 |
+| q8_0 | q8_0 | auto→36 | 64 | 6832 MiB | 23.0 | 9.74 |
+
+後續固定採用 q8_0/q8_0。
+
+---
+
+## 其他已測組合
+
+固定 ctx=32768、q8/q8、b512：
+
+| ngl | ubatch | VRAM | compute buf | prompt t/s | decode t/s |
+|---:|---:|---:|---:|---:|---:|
+| 41 | 64 | 7653 MiB | 114 MiB | 170.8 | 10.87 |
+| 40 | 128 | 7511 MiB | 127 MiB | 198.7 | 10.40 |
+| 41 | 128 | 7667 MiB | 127 MiB | 204.8 | 10.83 |
+| 42 | 64 | 7786 MiB | 114 MiB | 174.4 | 11.31 |
+
+---
+
+## 關於可重現性
+
+這份 repo 保存的是**當時實際量到的參數與結果**，目的是讓未來快速重建環境，而不是做跨平台嚴格科學 benchmark。
+
+原始 benchmark 使用的完整 prompt 文字與 raw logs 目前沒有保存在 repo，因此這些舊數據應視為 reference measurements，而不是 bit-for-bit reproducible benchmark。
+
+之後若重新測試，建議順手記錄：
+
+- GPU / CPU / RAM
+- driver 與 llama.cpp commit
+- GGUF 檔名與 SHA256
+- 完整 command line
+- prompt token 數
+- prompt / decode tok/s
+- peak VRAM
+
+這樣以後換電腦時就很好比。
+
+---
+
+## Model architecture
 
 | Field | Value |
 |---|---|
 | Architecture | Gemma 4 |
 | Layers | 48 |
-| Attention heads | 16 (8 KV heads, alternating SWA/global) |
+| Attention heads | 16（8 KV heads，alternating SWA/global） |
 | Embedding dim | 3840 |
 | Feed-forward dim | 15360 |
 | SWA window | 1024 |
 | Max context | 131072 |
-| Quant | Q4_K_M (4.95 BPW) |
-
----
-
-## Logs
-
-完整 logs 在 `logs_round4/`，Round 1-3 在 `logs/`。
+| Quant | Q4_K_M（4.95 BPW） |
 
 ---
 
 ## License
 
-MIT — feel free to use, share, and adapt. PRs with additional benchmarks welcome!
+MIT — 可自由使用、分享與修改。
